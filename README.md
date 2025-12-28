@@ -248,3 +248,6 @@ text
 - Hex 형식: `#ffe44c`, `#90EE90`
 - RGB 형식: `rgb(255, 228, 76)`
 - 색상 이름: `yellow`, `lightgreen`
+
+---
+Verifying ownership for Open VSX issue #6979
