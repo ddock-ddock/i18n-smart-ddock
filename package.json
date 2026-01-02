@@ -1,8 +1,8 @@
 {
   "name": "i18n-smart-ddock",
   "icon": "images/ddock.png",
-  "displayName": "I18n Smart DDOCK",
-  "description": "Korean text extraction and i18n management extension",
+  "displayName": "I18n Smart DDOCK - Auto Korean Extract & i18n Solution",
+  "description": "The complete i18n solution: Auto-extract Korean text, convert to i18n keys, translate with DeepL, and manage JSON locales. Google Sheets sync is also supported.",
   "version": "0.1.0",
   "publisher": "ddock",
   "author": {
@@ -17,7 +17,23 @@
     "vscode": "^1.83.0"
   },
   "categories": [
-    "Other"
+    "Productivity",
+    "Linters",
+    "Visualization"
+  ],
+  "keywords": [
+    "i18n",
+    "translation",
+    "localization",
+    "internationalization",
+    "auto-translate",
+    "korean",
+    "deepl",
+    "google-sheets",
+    "react-i18next",
+    "vue-i18n",
+    "locales-management",
+    "extract-text"
   ],
   "activationEvents": [],
   "main": "./out/extension.js",
