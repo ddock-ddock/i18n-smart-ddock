@@ -1,4 +1,4 @@
-# I18n Smart DDOCK
+# [I18n Smart DDOCK](https://open-vsx.org/extension/ddock/i18n-smart-ddock)
 
 한글 텍스트를 자동으로 추출하고 i18n 키로 변환하여 다국어 지원을 쉽게 만들어주는 VSCode 확장프로그램입니다.
 
