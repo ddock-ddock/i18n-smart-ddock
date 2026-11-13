@@ -9,6 +9,31 @@ class DeepLTranslationService implements TranslationService {
     this.apiKey = apiKey;
   }
 
+  // {{ }} / ${} / {expr} 는 번역에서 빼고, 문장 안의 태그는 유지한다.
+  private protectInterpolations(text: string): { text: string; placeholders: string[] } {
+    const placeholders: string[] = [];
+    const protect = (match: string) => {
+      const token = `<x id="${placeholders.length}"/>`;
+      placeholders.push(match);
+      return token;
+    };
+
+    let protectedText = text.replace(/\{\{[\s\S]*?\}\}/g, protect);
+    protectedText = protectedText.replace(/\$\{[\s\S]*?\}/g, protect);
+    protectedText = protectedText.replace(/\{[^{}\n<>]+\}/g, protect);
+    return { text: protectedText, placeholders };
+  }
+
+  private restoreInterpolations(text: string, placeholders: string[]): string {
+    if (placeholders.length === 0) {
+      return text;
+    }
+    return text.replace(/<x\s+id=["'](\d+)["']\s*(?:\/>|>\s*<\/x>)/gi, (match, id) => {
+      const placeholder = placeholders[Number(id)];
+      return placeholder ?? match;
+    });
+  }
+
   async translate(text: string, targetLang: string): Promise<string> {
     const languageMap: { [key: string]: string } = {
       en: 'EN',
@@ -19,19 +44,26 @@ class DeepLTranslationService implements TranslationService {
 
     const targetLanguage = languageMap[targetLang] || targetLang;
     const targetText = removeQuotes(text);
+    const { text: protectedText, placeholders } = this.protectInterpolations(targetText);
+    const hasMarkup = placeholders.length > 0 || /<\/?[a-zA-Z][^>]*>/.test(protectedText);
 
     try {
+      const params: Record<string, string> = {
+        text: protectedText,
+        target_lang: targetLanguage,
+        source_lang: 'KO', // 한국어에서 번역
+      };
+      if (hasMarkup) {
+        params.tag_handling = 'html';
+      }
+
       const response = await fetch('https://api-free.deepl.com/v2/translate', {
         method: 'POST',
         headers: {
           Authorization: `DeepL-Auth-Key ${this.apiKey}`,
           'Content-Type': 'application/x-www-form-urlencoded',
         },
-        body: new URLSearchParams({
-          text: targetText,
-          target_lang: targetLanguage,
-          source_lang: 'KO', // 한국어에서 번역
-        }),
+        body: new URLSearchParams(params),
       });
 
       if (!response.ok) {
@@ -39,7 +71,7 @@ class DeepLTranslationService implements TranslationService {
       }
 
       const data = (await response.json()) as any;
-      return data.translations[0].text;
+      return this.restoreInterpolations(data.translations[0].text, placeholders);
     } catch (error) {
       console.error('DeepL 번역 오류:', error);
       throw error;

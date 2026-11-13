@@ -117,6 +117,19 @@ class LocalesGenerationService {
     return languageMap[languageCode] || languageCode.toUpperCase();
   }
 
+  // 소스 줄바꿈과 들여쓰기는 번역 문장에서 공백 한 칸이다.
+  private collapseFormattingWhitespace(text: string): string {
+    return text.replace(/\s+/g, ' ').trim();
+  }
+
+  private buildLocaleKey(fileType: FileType, text: string): string {
+    const variableInfo = extractVariables(fileType, text);
+    let key =
+      variableInfo.variables.length === 0 ? convertToI18nKey(text) : convertToI18nKey(variableInfo.template);
+    key = key.replace(/\\{2,}/g, '\\');
+    return this.currentNamespace ? `${this.currentNamespace}.${key}` : key;
+  }
+
   // 번역이 필요한 텍스트만 필터링하는 헬퍼 메서드
   private async filterTextsForTranslation(
     fileType: FileType,
@@ -186,12 +199,26 @@ class LocalesGenerationService {
 
     // 기존 파일 읽기
     const existingLocales = await this.readExistingLocales(targetPath);
+    const sourceTexts =
+      language === 'ko' ? originalTexts.map((text) => this.collapseFormattingWhitespace(text)) : originalTexts;
+
+    // 키는 같고 값만 소스 줄바꿈이 남아 있으면 한국어 값을 다시 쓴다.
+    if (language === 'ko') {
+      for (const text of sourceTexts) {
+        const key = this.buildLocaleKey(fileType, text);
+        const current = existingLocales[key];
+        if (typeof current === 'string' && current !== text && this.collapseFormattingWhitespace(current) === text) {
+          delete existingLocales[key];
+        }
+      }
+    }
+
     const existingKeys = new Set(Object.keys(existingLocales));
 
     // 번역이 필요한 텍스트만 필터링 (번역 통신 중복 방지)
     const { textsToTranslate, skippedTexts, skippedKeys } = await this.filterTextsForTranslation(
       fileType,
-      originalTexts,
+      sourceTexts,
       existingKeys,
     );
 
@@ -212,7 +239,7 @@ class LocalesGenerationService {
     if (translatedTexts) {
       // 원본 텍스트와 번역된 텍스트의 인덱스 매핑
       const textIndexMap = new Map<string, number>();
-      originalTexts.forEach((text, index) => {
+      sourceTexts.forEach((text, index) => {
         textIndexMap.set(text, index);
       });
 

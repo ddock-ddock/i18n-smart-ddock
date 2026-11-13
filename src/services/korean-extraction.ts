@@ -1,6 +1,116 @@
 import type { TextRange, ExtractedTexts, FileType } from '../types';
 import { removeQuotes } from '../utils';
 
+type InlineTagKind = 'inline' | 'block' | 'other' | 'skip';
+
+interface TemplateTag {
+  start: number;
+  end: number;
+  name: string;
+  closing: boolean;
+  selfClosing: boolean;
+}
+
+interface TemplateNode {
+  type: 'text' | 'element';
+  start: number;
+  end: number;
+  name?: string;
+  kind?: InlineTagKind;
+  openEnd?: number;
+  closeStart?: number;
+  children: TemplateNode[];
+}
+
+const INLINE_TAGS = new Set([
+  'a',
+  'abbr',
+  'b',
+  'bdi',
+  'bdo',
+  'br',
+  'cite',
+  'code',
+  'data',
+  'del',
+  'dfn',
+  'em',
+  'i',
+  'ins',
+  'kbd',
+  'mark',
+  'q',
+  's',
+  'samp',
+  'small',
+  'span',
+  'strong',
+  'sub',
+  'sup',
+  'time',
+  'u',
+  'var',
+  'wbr',
+]);
+
+const BLOCK_TAGS = new Set([
+  'address',
+  'article',
+  'aside',
+  'blockquote',
+  'button',
+  'caption',
+  'dd',
+  'div',
+  'dl',
+  'dt',
+  'fieldset',
+  'figcaption',
+  'figure',
+  'footer',
+  'form',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'header',
+  'hr',
+  'li',
+  'main',
+  'nav',
+  'ol',
+  'p',
+  'pre',
+  'section',
+  'table',
+  'tbody',
+  'td',
+  'template',
+  'tfoot',
+  'th',
+  'thead',
+  'tr',
+  'ul',
+]);
+
+const VOID_TAGS = new Set([
+  'area',
+  'base',
+  'br',
+  'col',
+  'embed',
+  'hr',
+  'img',
+  'input',
+  'link',
+  'meta',
+  'source',
+  'track',
+  'wbr',
+]);
+
 class KoreanExtractionService {
   // 주석 제거 함수 (위치 매핑 정보도 반환)
   private removeCommentsWithMapping(text: string): {
@@ -483,18 +593,22 @@ class KoreanExtractionService {
   ): TextRange[] {
     const koreanRanges: TextRange[] = [];
 
+    const richRanges = this.findInlineRichTextRanges(processedText, positionMap, excludeRanges);
+    const overlapsRichText = (range: TextRange) =>
+      richRanges.some((rich) => range.start < rich.end && range.end > rich.start);
+
     const { variableRanges, extractedRanges } = this.extractVariablesFromHtmlTemplate(
       processedText,
       positionMap,
       excludeRanges,
       fileType,
     );
-    koreanRanges.push(...extractedRanges);
+    koreanRanges.push(...extractedRanges.filter((range) => !overlapsRichText(range)));
 
     // Vue 파일인 경우 배열 리터럴에서 한글 문자열 추출
     if (fileType === 'vue') {
       const arrayLiteralRanges = this.extractKoreanFromVueArrayLiterals(processedText, positionMap, excludeRanges);
-      koreanRanges.push(...arrayLiteralRanges);
+      koreanRanges.push(...arrayLiteralRanges.filter((range) => !overlapsRichText(range)));
     }
 
     // 문자별 처리 로직
@@ -506,10 +620,342 @@ class KoreanExtractionService {
     );
 
     // variableRanges 기준으로 characterProcessedRanges 쪼개기
-    const splitRanges = this.splitByVariables(characterProcessedRanges, variableRanges);
-    koreanRanges.push(...splitRanges);
+    const splitRanges = this.splitByVariables(
+      characterProcessedRanges.filter((range) => !overlapsRichText(range)),
+      variableRanges,
+    );
+    koreanRanges.push(...richRanges, ...splitRanges);
 
     return koreanRanges;
+  }
+
+  // 인라인 태그로 끊긴 문장을 태그까지 포함해 한 덩어리로 묶는다.
+  private findInlineRichTextRanges(
+    processedText: string,
+    positionMap: number[],
+    excludeRanges: { start: number; end: number }[],
+  ): TextRange[] {
+    const root = this.parseTemplate(processedText, excludeRanges);
+    const ranges: TextRange[] = [];
+    this.collectRichTextRanges(root, processedText, positionMap, ranges);
+    return ranges;
+  }
+
+  private collectRichTextRanges(
+    element: TemplateNode,
+    text: string,
+    positionMap: number[],
+    ranges: TextRange[],
+  ): void {
+    if (element.type !== 'element' || element.kind === 'skip' || element.kind === 'inline') {
+      return;
+    }
+
+    this.emitPhrasingSegments(element, text, positionMap, ranges);
+
+    for (const child of element.children) {
+      if (child.type === 'element') {
+        this.collectRichTextRanges(child, text, positionMap, ranges);
+      }
+    }
+  }
+
+  private emitPhrasingSegments(
+    element: TemplateNode,
+    text: string,
+    positionMap: number[],
+    ranges: TextRange[],
+  ): void {
+    let segment: TemplateNode[] = [];
+    const flush = () => {
+      if (this.countKoreanTextNodes(segment, text) >= 2) {
+        const collapseWhitespace = element.name !== 'pre' && element.name !== 'textarea';
+        this.pushTrimmedRange(
+          text,
+          positionMap,
+          segment[0].start,
+          segment[segment.length - 1].end,
+          ranges,
+          collapseWhitespace,
+        );
+      }
+      segment = [];
+    };
+
+    for (const child of element.children) {
+      if (child.type === 'element' && child.kind !== 'inline') {
+        flush();
+        continue;
+      }
+      segment.push(child);
+    }
+    flush();
+  }
+
+  private countKoreanTextNodes(nodes: TemplateNode[], text: string): number {
+    let count = 0;
+    const walk = (node: TemplateNode) => {
+      if (node.type === 'text') {
+        if (/[가-힣]/.test(text.slice(node.start, node.end))) {
+          count++;
+        }
+        return;
+      }
+      if (node.kind !== 'inline') {
+        return;
+      }
+      node.children.forEach(walk);
+    };
+    nodes.forEach(walk);
+    return count;
+  }
+
+  private pushTrimmedRange(
+    text: string,
+    positionMap: number[],
+    start: number,
+    end: number,
+    ranges: TextRange[],
+    collapseWhitespace = true,
+  ): void {
+    const raw = text.slice(start, end);
+    const leading = raw.length - raw.trimStart().length;
+    const trailing = raw.length - raw.trimEnd().length;
+    const trimmedStart = start + leading;
+    const trimmedEnd = end - trailing;
+    if (trimmedEnd <= trimmedStart) {
+      return;
+    }
+    if (positionMap[trimmedStart] === undefined || positionMap[trimmedEnd - 1] === undefined) {
+      return;
+    }
+
+    const slice = text.slice(trimmedStart, trimmedEnd);
+    const normalized = collapseWhitespace ? this.collapseFormattingWhitespace(slice) : slice;
+    if (!/[가-힣]/.test(normalized)) {
+      return;
+    }
+
+    ranges.push({
+      start: positionMap[trimmedStart],
+      end: positionMap[trimmedEnd - 1] + 1,
+      text: normalized,
+    });
+  }
+
+  // 소스 줄바꿈과 들여쓰기는 화면에서 공백 한 칸이다.
+  private collapseFormattingWhitespace(text: string): string {
+    return text.replace(/\s+/g, ' ').trim();
+  }
+
+  private keepsSourceWhitespace(text: string, gtIndex: number): boolean {
+    const match = text.slice(0, gtIndex).match(/<([A-Za-z][\w:-]*)[^<]*$/);
+    const tagName = match?.[1]?.toLowerCase();
+    return tagName === 'pre' || tagName === 'textarea';
+  }
+
+  private parseTemplate(text: string, excludeRanges: { start: number; end: number }[]): TemplateNode {
+    const root: TemplateNode = {
+      type: 'element',
+      start: 0,
+      end: text.length,
+      name: '#root',
+      kind: 'block',
+      openEnd: 0,
+      closeStart: text.length,
+      children: [],
+    };
+    const stack: TemplateNode[] = [root];
+    let cursor = 0;
+    let index = 0;
+
+    const appendText = (from: number, to: number) => {
+      if (to <= from) {
+        return;
+      }
+      stack[stack.length - 1].children.push({
+        type: 'text',
+        start: from,
+        end: to,
+        children: [],
+      });
+    };
+
+    while (index < text.length) {
+      const excluded = excludeRanges.find((range) => index >= range.start && index < range.end);
+      if (excluded) {
+        appendText(cursor, excluded.start);
+        cursor = excluded.end;
+        index = excluded.end;
+        continue;
+      }
+
+      if (text[index] !== '<') {
+        index++;
+        continue;
+      }
+
+      const tag = this.readHtmlTag(text, index);
+      if (!tag) {
+        index++;
+        continue;
+      }
+
+      appendText(cursor, tag.start);
+
+      if (tag.closing) {
+        let matched = -1;
+        for (let depth = stack.length - 1; depth >= 1; depth--) {
+          if (stack[depth].name === tag.name) {
+            matched = depth;
+            break;
+          }
+        }
+        if (matched !== -1) {
+          while (stack.length - 1 > matched) {
+            const unclosed = stack.pop()!;
+            unclosed.closeStart = tag.start;
+            unclosed.end = tag.start;
+          }
+          const element = stack.pop()!;
+          element.closeStart = tag.start;
+          element.end = tag.end;
+        }
+        cursor = tag.end;
+        index = tag.end;
+        continue;
+      }
+
+      const element: TemplateNode = {
+        type: 'element',
+        start: tag.start,
+        end: tag.end,
+        name: tag.name,
+        kind: this.tagKind(tag.name),
+        openEnd: tag.end,
+        closeStart: tag.end,
+        children: [],
+      };
+      stack[stack.length - 1].children.push(element);
+
+      if (element.kind === 'skip' && !tag.selfClosing) {
+        const closeMatch = text.slice(tag.end).match(new RegExp(`</${tag.name}\\s*>`, 'i'));
+        if (closeMatch && closeMatch.index !== undefined) {
+          element.closeStart = tag.end + closeMatch.index;
+          element.end = element.closeStart + closeMatch[0].length;
+        }
+        cursor = element.end;
+        index = element.end;
+        continue;
+      }
+
+      if (!tag.selfClosing) {
+        stack.push(element);
+      }
+      cursor = tag.end;
+      index = tag.end;
+    }
+
+    appendText(cursor, text.length);
+    while (stack.length > 1) {
+      const unclosed = stack.pop()!;
+      unclosed.closeStart = text.length;
+      unclosed.end = text.length;
+    }
+    return root;
+  }
+
+  private tagKind(name: string): InlineTagKind {
+    if (name === 'script' || name === 'style') {
+      return 'skip';
+    }
+    if (name === '' || BLOCK_TAGS.has(name)) {
+      return 'block';
+    }
+    if (INLINE_TAGS.has(name)) {
+      return 'inline';
+    }
+    return 'other';
+  }
+
+  private readHtmlTag(text: string, index: number): TemplateTag | null {
+    if (text[index] !== '<') {
+      return null;
+    }
+
+    let cursor = index + 1;
+    if (text[cursor] === '!' || text[cursor] === '?') {
+      return null;
+    }
+
+    let closing = false;
+    if (text[cursor] === '/') {
+      closing = true;
+      cursor++;
+    }
+
+    if (text[cursor] === '>') {
+      return { start: index, end: cursor + 1, name: '', closing, selfClosing: false };
+    }
+
+    if (!/[A-Za-z]/.test(text[cursor] ?? '')) {
+      return null;
+    }
+
+    const nameStart = cursor;
+    while (cursor < text.length && /[A-Za-z0-9:_-]/.test(text[cursor])) {
+      cursor++;
+    }
+    const name = text.slice(nameStart, cursor).toLowerCase();
+
+    let quote: '"' | "'" | '`' | null = null;
+    let braceDepth = 0;
+    let selfClosing = false;
+    while (cursor < text.length) {
+      const char = text[cursor];
+      if (quote) {
+        if (char === '\\') {
+          cursor += 2;
+          continue;
+        }
+        if (char === quote) {
+          quote = null;
+        }
+        cursor++;
+        continue;
+      }
+      if (char === '"' || char === "'" || char === '`') {
+        quote = char;
+        cursor++;
+        continue;
+      }
+      if (char === '{') {
+        braceDepth++;
+        cursor++;
+        continue;
+      }
+      if (char === '}') {
+        braceDepth = Math.max(0, braceDepth - 1);
+        cursor++;
+        continue;
+      }
+      if (char === '/' && text[cursor + 1] === '>' && braceDepth === 0) {
+        selfClosing = true;
+        cursor += 2;
+        break;
+      }
+      if (char === '>' && braceDepth === 0) {
+        cursor++;
+        break;
+      }
+      cursor++;
+    }
+
+    if (VOID_TAGS.has(name)) {
+      selfClosing = true;
+    }
+
+    return { start: index, end: cursor, name, closing, selfClosing };
   }
 
   private splitByVariables(koreanRanges: TextRange[], variableRanges: TextRange[]): TextRange[] {
@@ -637,7 +1083,15 @@ class KoreanExtractionService {
 
           // 문자열 안에 한글이 있었는지 확인
           if (hasKorean) {
-            this.saveStringContent(currentWord, currentStart, stringType, positionMap, koreanRanges, fileType);
+            this.saveStringContent(
+              currentWord,
+              currentStart,
+              stringType,
+              positionMap,
+              koreanRanges,
+              fileType,
+              processedText,
+            );
           }
 
           // 문자열 종료
@@ -713,6 +1167,7 @@ class KoreanExtractionService {
     positionMap: number[],
     koreanRanges: TextRange[],
     fileType: FileType,
+    processedText: string,
   ): void {
     // 따옴표는 제외하고 내용만 추출
     let content = removeQuotes(currentWord.trim());
@@ -749,11 +1204,19 @@ class KoreanExtractionService {
         const textEnd = currentStart + 1 + templateOffset + trimmedEnd;
         const textOriginalStart = positionMap[textStart];
         const textOriginalEnd = positionMap[textEnd - 1] + 1;
+        const keepWhitespace = templateOffset > 0 || this.keepsSourceWhitespace(processedText, currentStart);
+        const normalizedText = keepWhitespace
+          ? extractedContent.trim()
+          : this.collapseFormattingWhitespace(extractedContent);
+
+        if (!normalizedText) {
+          return;
+        }
 
         koreanRanges.push({
           start: textOriginalStart,
           end: textOriginalEnd,
-          text: extractedContent.trim(),
+          text: normalizedText,
         });
       } else {
         const textStart = currentStart + 1;

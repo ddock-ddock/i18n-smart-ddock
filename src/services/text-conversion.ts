@@ -74,6 +74,15 @@ class TextConversionService {
       return i18nFunction;
     }
 
+    if (this.containsInlineMarkup(text)) {
+      if (fileType === 'vue') {
+        return `<span v-html="${i18nFunction}"></span>`;
+      }
+      if (fileType === 'tsx') {
+        return `<span dangerouslySetInnerHTML={{ __html: ${i18nFunction} }} />`;
+      }
+    }
+
     const wrapperMap = {
       tsx: `{${i18nFunction}}`,
       vue: `{{${i18nFunction}}}`,
@@ -397,6 +406,10 @@ class TextConversionService {
     }
 
     return mod;
+  }
+
+  private containsInlineMarkup(text: string): boolean {
+    return /<\/?[a-zA-Z][^>]*>/.test(text);
   }
 
   // 텍스트에서 변수 추출 및 템플릿 생성
