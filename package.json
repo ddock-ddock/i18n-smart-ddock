@@ -144,6 +144,11 @@
           "group": "navigation@1"
         },
         {
+          "command": "i18n-smart-ddock.addSelected",
+          "when": "view == I18nSmartDDOCK && I18nSmartDDOCK.isActive",
+          "group": "navigation@7"
+        },
+        {
           "command": "i18n-smart-ddock.start",
           "when": "view == I18nSmartDDOCK && !I18nSmartDDOCK.isActive",
           "group": "navigation@2"
