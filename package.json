@@ -3,7 +3,7 @@
   "icon": "images/ddock.png",
   "displayName": "I18n Smart DDOCK - Auto Korean Extract & i18n Solution",
   "description": "The complete i18n solution: Auto-extract Korean text, convert to i18n keys, translate with DeepL, and manage JSON locales. Google Sheets sync is also supported.",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "publisher": "ddock",
   "author": {
     "name": "hyen",
